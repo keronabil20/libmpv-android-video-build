@@ -1,0 +1,35 @@
+--- a/osdep/timer.c
++++ b/osdep/timer.c
+@@ -56,8 +56,15 @@
+ int64_t mp_time_ns(void)
+ {
+     uint64_t r = mp_raw_time_ns() - raw_time_offset;
+-    if (r < MP_START_TIME)
++    if (r < MP_START_TIME || r > (uint64_t)INT64_MAX) {
++        // The raw clock jumped backwards far enough to wrap the
++        // subtraction (seen on some Android devices across suspend).
++        // Re-base instead of returning a negative time, which used
++        // to trip the time_us > 0 assertions and abort the process.
++        raw_time_offset = mp_raw_time_ns();
++        raw_time_offset -= MP_START_TIME;
+         r = MP_START_TIME;
++    }
+     return r;
+ }
+ 
+--- a/osdep/timer-linux.c
++++ b/osdep/timer-linux.c
+@@ -35,7 +35,12 @@
+ uint64_t mp_raw_time_ns(void)
+ {
+     struct timespec tp = {0};
+-#if defined(CLOCK_MONOTONIC_RAW)
++#if defined(CLOCK_BOOTTIME)
++    // CLOCK_BOOTTIME keeps counting across suspend and avoids the
++    // backward jumps seen with CLOCK_MONOTONIC_RAW on some Android
++    // devices, which used to wrap mp_time_ns() into negative times.
++    clock_gettime(CLOCK_BOOTTIME, &tp);
++#elif defined(CLOCK_MONOTONIC_RAW)
+     clock_gettime(CLOCK_MONOTONIC_RAW, &tp);
+ #else
+     timespec_get(&tp, TIME_UTC);
